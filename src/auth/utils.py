@@ -1,0 +1,52 @@
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
+from typing import Optional
+import jwt  # type: ignore
+import uuid
+from src.config import Config
+import logging
+
+passwd_context = CryptContext(schemes=["bcrypt"])
+
+ACCESS_TOKEN_EXPIRY = 3600
+
+
+def generate_password_hash(password: str) -> str:
+    hash = passwd_context.hash(password)
+    return hash
+
+
+def verify_password(password: str, hash: str) -> bool:
+    return passwd_context.verify(password, hash)
+
+
+# secret and algorithm for JWTs; can be overridden via environment
+# SECRET_KEY = os.getenv("JWT_SECRET", "change-me")
+# ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+
+
+def create_access_token(
+    user_data: dict, expiry: Optional[timedelta] = None, refresh: Optional[bool] = False
+) -> str:
+    payload = {}
+    payload["user"] = user_data
+    payload["exp"] = datetime.now() + (
+        expiry if expiry is not None else timedelta(seconds=ACCESS_TOKEN_EXPIRY)
+    )
+    payload["jti"] = str(uuid.uuid4())
+    payload["refresh"] = refresh
+    token = jwt.encode(
+        payload=payload, key=Config.JWT_SECRET, algorithm=Config.JWT_ALGORITHM
+    )
+    return token
+
+
+def decode_token(token: str) -> Optional[dict]:
+    try:
+        payload = jwt.decode(
+            jwt=token, key=Config.JWT_SECRET, algorithms=[Config.JWT_ALGORITHM]
+        )
+        return payload
+    except jwt.PyJWTError as e:
+        logging.exception(e)
+        return None
