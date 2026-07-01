@@ -1,3 +1,4 @@
+from typing import Any, cast
 from fastapi import APIRouter, Depends, status, BackgroundTasks
 from .schemas import UserCreateModel, UserResponseModel, UserLoginModel,UserBooksModel,EmailModel,PasswordResetRequestModel,PasswordResetConfirmModel
 from .service import UserService
@@ -11,6 +12,7 @@ from .dependencies import RefreshTokenBearer, AccessTokenBearer,get_current_user
 from src.db.redis import add_jti_to_blocklist
 from src.mail import mail, create_message
 from src.config import Config
+from src.celery_tasks import send_email
 
 auth_router = APIRouter()
 user_service = UserService()
@@ -22,9 +24,9 @@ REFRESH_TOKEN_EXPIRY = 2
 async def send_mail(emails:EmailModel):
     addresses = emails.addresses
     html = "<h1>Welcome to Our App</h1><p>This is a test email sent from FastAPI.</p>"
-    message = create_message(recipients=addresses, subject="Test Email", body=html)
+    subject="Test Email"
     try:
-        await mail.send_message(message)
+        cast(Any, send_email).delay(recipients=addresses, subject=subject, body=html)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -59,11 +61,11 @@ async def create_user_account(
     <h1>Verify your Email</h1>
     <p>Please click this <a href="{link}">link</a> to verify your email</p>
     """
-    message = create_message(recipients=[email], subject="Verify Email", body=html_message)
+    subject='Verify your email'
     
-    bg_tasks.add_task(mail.send_message,message)
+    
+    cast(Any, send_email).delay(recipients=email, subject=subject, body=html_message)
 
-    # return new_user
     return {
         "message":"Account Created! Check your email to verify",
         "user": new_user

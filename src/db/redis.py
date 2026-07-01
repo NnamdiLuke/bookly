@@ -3,12 +3,14 @@ from src.config import Config
 
 JTI_EXPIRY = 3600
 
-token_blocklist = redis.Redis(
-    host=Config.REDIS_HOST,
-    port=Config.REDIS_PORT,
-    db=0,
-    decode_responses=True,
-)
+# token_blocklist = redis.Redis(
+#     host=Config.REDIS_HOST,
+#     port=Config.REDIS_PORT,
+#     db=0,
+#     decode_responses=True,
+# )
+token_blocklist = redis.from_url(Config.REDIS_URL)
+
 
 # add token to block list
 
@@ -23,6 +25,6 @@ async def add_jti_to_blocklist(jti: str) -> None:
 
 # check if token exists on blocklist
 async def token_in_blocklist(jti: str) -> bool:
-    jti = await token_blocklist.get(jti)
+    value = await token_blocklist.get(jti)
 
-    return jti is not None
+    return value is not None
