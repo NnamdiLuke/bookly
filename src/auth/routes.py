@@ -1,14 +1,16 @@
 from fastapi import APIRouter, Depends, status
-from .schemas import UserCreateModel, UserResponseModel, UserLoginModel,UserBooksModel
+from .schemas import UserCreateModel, UserResponseModel, UserLoginModel,UserBooksModel,EmailModel,PasswordResetRequestModel,PasswordResetConfirmModel
 from .service import UserService
 from src.db.main import get_session
 from sqlmodel.ext.asyncio.session import AsyncSession
 from fastapi.exceptions import HTTPException
-from .utils import create_access_token, decode_token, verify_password
+from .utils import create_access_token, decode_token, verify_password,create_url_safe_token,decode_url_safe_token,generate_password_hash
 from datetime import timedelta, datetime
 from fastapi.responses import JSONResponse
 from .dependencies import RefreshTokenBearer, AccessTokenBearer,get_current_user,RoleChecker
 from src.db.redis import add_jti_to_blocklist
+from src.mail import mail, create_message
+from src.config import Config
 
 auth_router = APIRouter()
 user_service = UserService()
@@ -16,9 +18,23 @@ role_checker = RoleChecker(['admin','user'])
 
 REFRESH_TOKEN_EXPIRY = 2
 
+@auth_router.post('/send_mail')
+async def send_mail(emails:EmailModel):
+    addresses = emails.addresses
+    html = "<h1>Welcome to Our App</h1><p>This is a test email sent from FastAPI.</p>"
+    message = create_message(recipients=addresses, subject="Test Email", body=html)
+    try:
+        await mail.send_message(message)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Email sending failed: {str(e)}"
+    )
+    return JSONResponse(content={"message": "Email sent successfully", "recipients": addresses}, status_code=status.HTTP_200_OK)
+
 
 @auth_router.post(
-    "/signup", response_model=UserResponseModel, status_code=status.HTTP_201_CREATED
+    "/signup", status_code=status.HTTP_201_CREATED
 )
 async def create_user_account(
     user_data: UserCreateModel, session: AsyncSession = Depends(get_session)
@@ -34,8 +50,56 @@ async def create_user_account(
         )
 
     new_user = await user_service.create_user(user_data, session)
+    
+    token = create_url_safe_token({"email":email})
+    
+    link = f"http://{Config.DOMAIN}/api/v1/auth/verify/{token}"
+    
+    html_message = f"""
+    <h1>Verify your Email</h1>
+    <p>Please click this <a href="{link}">link</a> to verify your email</p>
+    """
+    message = create_message(recipients=[email], subject="Verify Email", body=html_message)
+    
+    await mail.send_message(message)
 
-    return new_user
+    # return new_user
+    return {
+        "message":"Account Created! Check your email to verify",
+        "user": new_user
+    }
+    
+    
+@auth_router.get('/verify/{token}')
+async def verify_user_account(token: str, session: AsyncSession = Depends(get_session)):
+    token_data = decode_url_safe_token(token)
+
+    if not token_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired token",
+        )
+
+    user_email = token_data.get('email')
+    if not user_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired token",
+        )
+
+    user = await user_service.get_user_by_email(user_email, session)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    await user_service.update_user(user,{'is_verified':True},session)
+    
+    return JSONResponse(
+        content={"message": "Email verified successfully"},
+        status_code=status.HTTP_200_OK,
+    )
 
 
 @auth_router.post("/login")
@@ -96,6 +160,84 @@ async def revoke_token(token_detail: dict = Depends(AccessTokenBearer())):
 
     return JSONResponse(
         content={"message": "Loggout out successfully"}, status_code=status.HTTP_200_OK
+    )
+
+
+"""
+1. Provide the email -> password reset request
+2. Send password link
+3. Reset password -> password reset confirmation
+
+"""
+
+@auth_router.post('/password-reset-request')
+async def password_reset_request(email_data:PasswordResetRequestModel,session:AsyncSession = Depends(get_session)):
+    email = email_data.email
+    
+    user_exists = await user_service.user_exists(email, session)
+
+    if not user_exists:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email doesn't exist on our database!",
+        )
+
+    
+    token = create_url_safe_token({"email":email})
+    
+    link = f"http://{Config.DOMAIN}/api/v1/auth/password-reset-confirm/{token}"
+    
+    html_message = f"""
+    <h1>Reset Your Password</h1>
+    <p>Please click this <a href="{link}">link</a> reset your password</p>
+    """
+    message = create_message(recipients=[email], subject="Reset your password", body=html_message)
+    
+    await mail.send_message(message)
+
+    return JSONResponse(
+        content={
+            "message":"Please check your email to reset your password",
+        },
+        status_code=status.HTTP_200_OK
+    )
+
+
+@auth_router.post('/password-reset-confirm/{token}')
+async def reset_account_password(token: str, passwords:PasswordResetConfirmModel, session: AsyncSession = Depends(get_session)):
+    new_password = passwords.new_password
+    confirm_password = passwords.confirm_new_password
+    if  new_password != confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passwords do not match",
+        )
+        
+    
+    token_data = decode_url_safe_token(token)
+
+    if not token_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired token",
+        )
+
+    user_email = token_data.get('email')
+
+    user = await user_service.get_user_by_email(user_email, session)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    
+    passwd_hash = generate_password_hash(new_password)
+
+    await user_service.update_user(user,{'password_hash': passwd_hash},session)
+    
+    return JSONResponse(
+        content={"message": "Password reset successfully"},
+        status_code=status.HTTP_200_OK,
     )
 
 
