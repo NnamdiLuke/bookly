@@ -42,7 +42,7 @@ app = FastAPI(
     },
     terms_of_service="httpS://example.com/tos",
     openapi_url=f"{version_prefix}/openapi.json",
-    # docs_url=f"{version_prefix}/docs",
+    docs_url=f"{version_prefix}/docs",
     # redoc_url=f"{version_prefix}/redoc"
 )
 
